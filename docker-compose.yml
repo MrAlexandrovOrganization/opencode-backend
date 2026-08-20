@@ -1,0 +1,29 @@
+services:
+  opencode-backend:
+    build: .
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      # Внутри сети whisper-net доступен opencode-server из opencode-bot.
+      OPENCODE_BASE_URL: http://opencode-server:4096
+      OPENCODE_USERNAME: ${OPENCODE_USERNAME:-opencode}
+      OPENCODE_PASSWORD: ${OPENCODE_PASSWORD:-}
+      OPENCODE_MODEL: ${OPENCODE_MODEL:-}
+      OPENCODE_AGENT: ${OPENCODE_AGENT:-build}
+      PERMISSION_MODE: ${PERMISSION_MODE:-ask}
+      OPENCODE_REQUEST_TIMEOUT: ${OPENCODE_REQUEST_TIMEOUT:-30m}
+      # Рабочая директория видна opencode-серверу как /workspace — загруженные
+      # файлы агент может читать.
+      WORKSPACE_DIR: /workspace
+      ADMIN_TOKEN: ${ADMIN_TOKEN:-}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+    volumes:
+      - /home/maxim/projects:/workspace
+    ports:
+      - "127.0.0.1:8091:8080"
+    networks:
+      - whisper-net
+
+networks:
+  whisper-net:
+    external: true

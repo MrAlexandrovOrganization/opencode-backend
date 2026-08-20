@@ -1,0 +1,5 @@
+.env
+opencode-backend
+*.exe
+*.test
+*.out
