@@ -227,6 +227,8 @@ type Question struct {
 	Question string           `json:"question"`
 	Header   string           `json:"header"`
 	Options  []QuestionOption `json:"options"`
+	Custom   *bool            `json:"custom"`   // false = без «своего ответа»
+	Multiple *bool            `json:"multiple"` // true = можно выбрать несколько
 }
 
 // QuestionAsked — событие question.asked.
