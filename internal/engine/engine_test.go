@@ -191,6 +191,55 @@ func TestCreateSession(t *testing.T) {
 	assertEvent(t, ch, "session.created")
 }
 
+func TestResumeSessionAfterRestart(t *testing.T) {
+	f := newFakeServer()
+	st := store.NewMemory()
+	hub := ws.NewHub()
+	oc := opencode.New(f.srv.URL, "opencode", "")
+	cfg := &config.Config{RequestTimeout: 5 * time.Second, WorkspaceDir: "/workspace"}
+
+	eng1 := New(oc, st, hub, cfg, testLogger())
+	eng1.EnsureUser("u1", "u1")
+	ctx1, cancel1 := context.WithCancel(context.Background())
+	eng1.Start(ctx1)
+	defer cancel1()
+
+	sess, err := eng1.CreateSession(context.Background(), "u1", "рабочая")
+	if err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+
+	// «Рестарт» шлюза: новый движок на том же хранилище, in-memory состояние
+	// (owner/sessionState) пусто — сессия живёт только в SQLite/Memory.
+	cancel1()
+	eng2 := New(oc, st, hub, cfg, testLogger())
+	eng2.EnsureUser("u1", "u1")
+
+	// GetSession сам активирует сохранённую сессию.
+	if _, err := eng2.GetSession("u1", sess.ID); err != nil {
+		t.Fatalf("GetSession после рестарта: %v", err)
+	}
+	// ResumeSession возвращает сессию и делает её активной для SendMessage.
+	resumed, err := eng2.ResumeSession("u1", sess.ID)
+	if err != nil {
+		t.Fatalf("ResumeSession: %v", err)
+	}
+	if resumed.ID != sess.ID {
+		t.Fatalf("resumed = %q, want %q", resumed.ID, sess.ID)
+	}
+
+	var req opencode.MessageRequest
+	req.AddText("продолжаем")
+	if _, err := eng2.SendMessage(context.Background(), "u1", sess.ID, req); err != nil {
+		t.Fatalf("SendMessage после resume: %v", err)
+	}
+
+	// Чужая сессия не резюмируется.
+	if _, err := eng2.ResumeSession("u2", sess.ID); err != ErrSessionNotFound {
+		t.Fatalf("ResumeSession чужой сессии: %v, want ErrSessionNotFound", err)
+	}
+}
+
 func TestSendMessageAsyncFlow(t *testing.T) {
 	f := newFakeServer()
 	eng, hub, st := testEngine(t, f)

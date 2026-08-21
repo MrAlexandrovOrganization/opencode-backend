@@ -51,6 +51,7 @@ func (s *Server) Handler() http.Handler {
 	protected.HandleFunc("GET /api/v1/sessions/{id}", s.getSession)
 	protected.HandleFunc("PATCH /api/v1/sessions/{id}", s.updateSession)
 	protected.HandleFunc("DELETE /api/v1/sessions/{id}", s.deleteSession)
+	protected.HandleFunc("POST /api/v1/sessions/{id}/resume", s.resumeSession)
 	protected.HandleFunc("POST /api/v1/sessions/{id}/fork", s.forkSession)
 	protected.HandleFunc("POST /api/v1/sessions/{id}/messages", s.sendMessage)
 	protected.HandleFunc("GET /api/v1/sessions/{id}/messages", s.listMessages)
@@ -241,6 +242,15 @@ func (s *Server) updateSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	sess, err := s.eng.RenameSession(r.Context(), userIDFrom(r.Context()), r.PathValue("id"), body.Title)
+	if err != nil {
+		writeEngineErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, sess)
+}
+
+func (s *Server) resumeSession(w http.ResponseWriter, r *http.Request) {
+	sess, err := s.eng.ResumeSession(userIDFrom(r.Context()), r.PathValue("id"))
 	if err != nil {
 		writeEngineErr(w, err)
 		return

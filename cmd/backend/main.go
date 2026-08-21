@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 	"time"
 
@@ -43,6 +44,12 @@ func main() {
 	var st store.Store
 	var sqliteDB *store.SQLite
 	if cfg.DBPath != "" {
+		if dir := filepath.Dir(cfg.DBPath); dir != "" {
+			if err := os.MkdirAll(dir, 0o755); err != nil {
+				logger.Error("mkdir db dir", "dir", dir, "error", err)
+				os.Exit(1)
+			}
+		}
 		sqliteDB, err = store.NewSQLite(cfg.DBPath)
 		if err != nil {
 			logger.Error("sqlite", "path", cfg.DBPath, "error", err)

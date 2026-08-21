@@ -128,6 +128,31 @@ func (e *Engine) addSession(userID, sessionID string) {
 	u.mu.Unlock()
 }
 
+// ensureSession возвращает активное состояние сессии. После рестарта шлюза
+// in-memory состояние теряется, но сессия и история переживают рестарт в
+// хранилище (SQLite) — ensureSession заново активирует сохранённую сессию
+// пользователя (регистрирует владельца и состояние), чтобы по ней можно было
+// продолжить работу и переключаться между сессиями.
+func (e *Engine) ensureSession(userID, sessionID string) (*SessionState, error) {
+	if st := e.sessionState(userID, sessionID); st != nil {
+		return st, nil
+	}
+	stored, err := e.store.GetSession(sessionID)
+	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			return nil, ErrSessionNotFound
+		}
+		return nil, err
+	}
+	if stored.UserID != userID {
+		return nil, ErrSessionNotFound
+	}
+	e.addSession(userID, sessionID)
+	e.updateDefaultSession(userID, sessionID)
+	e.log.Info("session resumed from store", "session_id", sessionID)
+	return e.sessionState(userID, sessionID), nil
+}
+
 func (e *Engine) removeOwner(sessionID string) {
 	e.mu.Lock()
 	userID, ok := e.owner[sessionID]
@@ -234,16 +259,25 @@ func (e *Engine) ListSessions(userID string) ([]*store.Session, error) {
 
 // GetSession возвращает сессию пользователя.
 func (e *Engine) GetSession(userID, sessionID string) (*store.Session, error) {
-	if _, ok := e.ownerFor(sessionID); !ok {
-		return nil, ErrSessionNotFound
+	if _, err := e.ensureSession(userID, sessionID); err != nil {
+		return nil, err
+	}
+	return e.store.GetSession(sessionID)
+}
+
+// ResumeSession активирует существующую сессию пользователя (для переключения
+// фронтенда на другую сессию) и возвращает её.
+func (e *Engine) ResumeSession(userID, sessionID string) (*store.Session, error) {
+	if _, err := e.ensureSession(userID, sessionID); err != nil {
+		return nil, err
 	}
 	return e.store.GetSession(sessionID)
 }
 
 // RenameSession переименовывает сессию.
 func (e *Engine) RenameSession(ctx context.Context, userID, sessionID, title string) (*store.Session, error) {
-	if _, ok := e.ownerFor(sessionID); !ok {
-		return nil, ErrSessionNotFound
+	if _, err := e.ensureSession(userID, sessionID); err != nil {
+		return nil, err
 	}
 	s, err := e.oc.UpdateSession(ctx, sessionID, title)
 	if err != nil {
@@ -262,8 +296,8 @@ func (e *Engine) RenameSession(ctx context.Context, userID, sessionID, title str
 
 // DeleteSession удаляет сессию.
 func (e *Engine) DeleteSession(ctx context.Context, userID, sessionID string) error {
-	if _, ok := e.ownerFor(sessionID); !ok {
-		return ErrSessionNotFound
+	if _, err := e.ensureSession(userID, sessionID); err != nil {
+		return err
 	}
 	if err := e.oc.DeleteSession(ctx, sessionID); err != nil {
 		return err
@@ -282,9 +316,9 @@ func (e *Engine) SendMessage(ctx context.Context, userID, sessionID string, req 
 	if len(req.Parts) == 0 {
 		return "", errors.New("нет частей сообщения")
 	}
-	sess := e.sessionState(userID, sessionID)
-	if sess == nil {
-		return "", ErrSessionNotFound
+	sess, err := e.ensureSession(userID, sessionID)
+	if err != nil {
+		return "", err
 	}
 	if !sess.tryAcquire() {
 		return "", ErrBusy
@@ -390,16 +424,16 @@ func assistantMessage(sessionID string, info opencode.AssistantInfo) opencode.Me
 
 // ListMessages возвращает историю сообщений сессии.
 func (e *Engine) ListMessages(userID, sessionID string) ([]*store.Message, error) {
-	if _, ok := e.ownerFor(sessionID); !ok {
-		return nil, ErrSessionNotFound
+	if _, err := e.ensureSession(userID, sessionID); err != nil {
+		return nil, err
 	}
 	return e.store.ListMessages(sessionID)
 }
 
 // GetMessage возвращает сообщение из истории.
 func (e *Engine) GetMessage(userID, sessionID, messageID string) (*store.Message, error) {
-	if _, ok := e.ownerFor(sessionID); !ok {
-		return nil, ErrSessionNotFound
+	if _, err := e.ensureSession(userID, sessionID); err != nil {
+		return nil, err
 	}
 	return e.store.GetMessage(messageID)
 }
@@ -408,16 +442,16 @@ func (e *Engine) GetMessage(userID, sessionID, messageID string) (*store.Message
 
 // AbortSession прерывает выполняющийся запрос сессии.
 func (e *Engine) AbortSession(ctx context.Context, userID, sessionID string) error {
-	if _, ok := e.ownerFor(sessionID); !ok {
-		return ErrSessionNotFound
+	if _, err := e.ensureSession(userID, sessionID); err != nil {
+		return err
 	}
 	return e.oc.AbortSession(ctx, sessionID)
 }
 
 // ReplyPermission отвечает на запрос разрешения.
 func (e *Engine) ReplyPermission(ctx context.Context, userID, sessionID, permissionID, response string) error {
-	if _, ok := e.ownerFor(sessionID); !ok {
-		return ErrSessionNotFound
+	if _, err := e.ensureSession(userID, sessionID); err != nil {
+		return err
 	}
 	if err := e.oc.ReplyPermission(ctx, sessionID, permissionID, response); err != nil {
 		return err

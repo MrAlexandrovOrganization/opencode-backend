@@ -224,6 +224,64 @@ func testAPIEndToEnd(t *testing.T, st store.Store) {
 	}
 }
 
+// TestAPIResumeSession — переключение фронтенда на сессию, пережившую
+// «рестарт» шлюза: новый сервер на том же хранилище резюмирует старую сессию.
+func TestAPIResumeSession(t *testing.T) {
+	f := newFakeOC()
+	t.Cleanup(f.srv.Close)
+	st := store.NewMemory()
+	hub := ws.NewHub()
+	oc := opencode.New(f.srv.URL, "opencode", "")
+	cfg := &config.Config{WorkspaceDir: t.TempDir(), RequestTimeout: 5 * time.Second}
+	discard := discardLogger()
+
+	eng1 := engine.New(oc, st, hub, cfg, discard)
+	eng1.EnsureUser("u1", "u1")
+	const admin = "admin-secret"
+	if err := st.EnsureAPIKey(&store.APIKey{TokenHash: token.Hash(admin), UserID: "u1", Label: "admin"}); err != nil {
+		t.Fatal(err)
+	}
+	srv1 := New(eng1, hub, st, cfg, discard)
+	ts1 := httptest.NewServer(srv1.Handler())
+	t.Cleanup(ts1.Close)
+
+	code, raw := req(t, ts1.URL+"/api/v1/sessions", "Bearer "+admin, "POST", map[string]string{"title": "тест"})
+	if code != http.StatusCreated {
+		t.Fatalf("create = %d: %s", code, raw)
+	}
+	var sess store.Session
+	json.Unmarshal(raw, &sess)
+
+	// «Рестарт»: второй сервер на том же хранилище, in-memory состояние пусто.
+	eng2 := engine.New(oc, st, hub, cfg, discard)
+	eng2.EnsureUser("u1", "u1")
+	srv2 := New(eng2, hub, st, cfg, discard)
+	ts2 := httptest.NewServer(srv2.Handler())
+	t.Cleanup(ts2.Close)
+
+	code, raw = req(t, ts2.URL+"/api/v1/sessions/"+sess.ID+"/resume", "Bearer "+admin, "POST", nil)
+	if code != http.StatusOK {
+		t.Fatalf("resume = %d: %s", code, raw)
+	}
+	var resumed store.Session
+	json.Unmarshal(raw, &resumed)
+	if resumed.ID != sess.ID {
+		t.Fatalf("resumed = %q, want %q", resumed.ID, sess.ID)
+	}
+
+	// После resume новый сервер принимает сообщения в эту сессию.
+	code, raw = req(t, ts2.URL+"/api/v1/sessions/"+sess.ID+"/messages",
+		"Bearer "+admin, "POST", map[string]any{"parts": []map[string]string{{"type": "text", "text": "продолжаем"}}})
+	if code != http.StatusAccepted {
+		t.Fatalf("messages после resume = %d: %s", code, raw)
+	}
+
+	// Несуществующая сессия — 404.
+	if code, _ := req(t, ts2.URL+"/api/v1/sessions/nope/resume", "Bearer "+admin, "POST", nil); code != http.StatusNotFound {
+		t.Fatalf("resume nope = %d, want 404", code)
+	}
+}
+
 // ── Хелперы ─────────────────────────────────────────────────────────────────
 
 // TestWebSocketUpgrade проверяет, что WS-апгрейд проходит сквозь logging- и
