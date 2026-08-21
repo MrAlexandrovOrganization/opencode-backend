@@ -279,6 +279,48 @@ func (e *Engine) SessionEmpty(ctx context.Context, userID, sessionID string) (bo
 	return len(msgs) == 0, nil
 }
 
+// SessionActivity описывает, что сессия делает прямо сейчас: занята ли
+// запросом, какой инструмент/статус выполняется, накопленный текст ответа,
+// ожидающие разрешения и вопросы агента, а также статус opencode-сервера
+// (idle/busy/retry). Позволяет извне (логи, админка, отладка) понять, почему
+// фронтенд может «висеть» на «Работаю…».
+type SessionActivity struct {
+	SessionID   string   `json:"sessionID"`
+	Busy        bool     `json:"busy"`
+	Status      string   `json:"status"`     // краткая строка «что агент делает сейчас»
+	Partial     string   `json:"partial"`    // накопленный текст ответа (обрезан)
+	Permissions []string `json:"permissions"` // ожидающие разрешения (permissionID)
+	Question    bool     `json:"question"`    // ожидает ответа на вопрос агента
+	OCStatus    string   `json:"ocStatus"`    // статус opencode-сервера: idle/busy/retry/""
+}
+
+// SessionActivity возвращает живой статус сессии.
+func (e *Engine) SessionActivity(ctx context.Context, userID, sessionID string) (*SessionActivity, error) {
+	if _, err := e.ensureSession(userID, sessionID); err != nil {
+		return nil, err
+	}
+	act := &SessionActivity{SessionID: sessionID}
+	if sess := e.sessionState(userID, sessionID); sess != nil {
+		sess.mu.Lock()
+		act.Busy = sess.busy
+		if sess.stream != nil {
+			act.Status = sess.stream.status
+			act.Partial = truncateString(sess.stream.partial, 1000)
+		}
+		for pid := range sess.perms {
+			act.Permissions = append(act.Permissions, pid)
+		}
+		act.Question = sess.pending != nil
+		sess.mu.Unlock()
+	}
+	if st, err := e.oc.SessionStatuses(ctx); err == nil {
+		if s, ok := st[sessionID]; ok {
+			act.OCStatus = s.Type
+		}
+	}
+	return act, nil
+}
+
 // ResumeSession активирует существующую сессию пользователя (для переключения
 // фронтенда на другую сессию) и возвращает её.
 func (e *Engine) ResumeSession(userID, sessionID string) (*store.Session, error) {
@@ -605,4 +647,16 @@ func mustJSON(v any) json.RawMessage {
 		return nil
 	}
 	return data
+}
+
+// truncateString обрезает s до max рун, добавляя «…» при усечении.
+func truncateString(s string, max int) string {
+	r := []rune(s)
+	if len(r) <= max {
+		return s
+	}
+	if max <= 1 {
+		return string(r[:max])
+	}
+	return string(r[:max-1]) + "…"
 }
