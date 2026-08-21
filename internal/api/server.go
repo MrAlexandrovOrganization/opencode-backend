@@ -51,6 +51,7 @@ func (s *Server) Handler() http.Handler {
 	protected.HandleFunc("GET /api/v1/sessions/{id}", s.getSession)
 	protected.HandleFunc("PATCH /api/v1/sessions/{id}", s.updateSession)
 	protected.HandleFunc("DELETE /api/v1/sessions/{id}", s.deleteSession)
+	protected.HandleFunc("GET /api/v1/sessions/{id}/empty", s.sessionEmpty)
 	protected.HandleFunc("POST /api/v1/sessions/{id}/resume", s.resumeSession)
 	protected.HandleFunc("POST /api/v1/sessions/{id}/fork", s.forkSession)
 	protected.HandleFunc("POST /api/v1/sessions/{id}/messages", s.sendMessage)
@@ -264,6 +265,17 @@ func (s *Server) deleteSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// sessionEmpty сообщает, пуста ли сессия (нет сообщений). Используется
+// фронтендами, чтобы не создавать дублирующие пустые сессии.
+func (s *Server) sessionEmpty(w http.ResponseWriter, r *http.Request) {
+	empty, err := s.eng.SessionEmpty(r.Context(), userIDFrom(r.Context()), r.PathValue("id"))
+	if err != nil {
+		writeEngineErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]bool{"empty": empty})
 }
 
 func (s *Server) forkSession(w http.ResponseWriter, r *http.Request) {

@@ -265,6 +265,20 @@ func (e *Engine) GetSession(userID, sessionID string) (*store.Session, error) {
 	return e.store.GetSession(sessionID)
 }
 
+// SessionEmpty возвращает true, если в сессии нет ни одного сообщения.
+// Позволяет фронтендам (например, /reset в боте) не плодить новые пустые
+// сессии, а переиспользовать уже существующую пустую.
+func (e *Engine) SessionEmpty(ctx context.Context, userID, sessionID string) (bool, error) {
+	if _, err := e.ensureSession(userID, sessionID); err != nil {
+		return false, err
+	}
+	msgs, err := e.store.ListMessages(sessionID)
+	if err != nil {
+		return false, err
+	}
+	return len(msgs) == 0, nil
+}
+
 // ResumeSession активирует существующую сессию пользователя (для переключения
 // фронтенда на другую сессию) и возвращает её.
 func (e *Engine) ResumeSession(userID, sessionID string) (*store.Session, error) {
