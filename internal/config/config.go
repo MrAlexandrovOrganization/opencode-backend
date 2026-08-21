@@ -6,6 +6,8 @@ import (
 	"os"
 	"strings"
 	"time"
+
+	"opencode-backend/internal/opencode"
 )
 
 // Config содержит все настройки opencode-backend.
@@ -21,6 +23,7 @@ type Config struct {
 	PermissionMode   string // ask / allow / deny (проксирование в opencode-сервер)
 	DefaultAgent     string
 	DefaultModel     string
+	FallbackModels   []opencode.ModelRef
 	LogLevel         string
 }
 
@@ -43,6 +46,7 @@ func Load() (*Config, error) {
 		PermissionMode:   getEnv("PERMISSION_MODE", "ask"),
 		DefaultAgent:     getEnv("OPENCODE_AGENT", "build"),
 		DefaultModel:     os.Getenv("OPENCODE_MODEL"),
+		FallbackModels:   parseModelList(os.Getenv("OPENCODE_MODEL_FALLBACK")),
 		LogLevel:         getEnv("LOG_LEVEL", "info"),
 	}, nil
 }
@@ -52,4 +56,17 @@ func getEnv(key, def string) string {
 		return v
 	}
 	return def
+}
+
+// parseModelList разбирает comma-separated список моделей "provider/model" в
+// слайс ModelRef. Пустые элементы отбрасываются.
+func parseModelList(v string) []opencode.ModelRef {
+	var out []opencode.ModelRef
+	for _, p := range strings.Split(v, ",") {
+		ref := opencode.ParseModelRef(p)
+		if ref.ModelID != "" {
+			out = append(out, ref)
+		}
+	}
+	return out
 }

@@ -341,6 +341,8 @@ func (e *Engine) SendMessage(ctx context.Context, userID, sessionID string, req 
 }
 
 // runMessage выполняет запрос в фоне сессии и сохраняет ответ ассистента.
+// При недоступности выбранной модели последовательно перебирает запасные
+// (OPENCODE_MODEL_FALLBACK) и в конце — дефолтную модель opencode (nil в запросе).
 func (e *Engine) runMessage(userID, sessionID, msgID string, req opencode.MessageRequest) {
 	defer func() {
 		if sess := e.sessionState(userID, sessionID); sess != nil {
@@ -361,10 +363,39 @@ func (e *Engine) runMessage(userID, sessionID, msgID string, req opencode.Messag
 		CompletedAt: &now,
 	}
 
-	resp, err := e.oc.SendMessage(ctx, sessionID, req)
-	if err != nil {
+	candidates := e.modelCandidates(req.Model)
+	var (
+		resp    *opencode.MessageResponse
+		lastErr error
+		usedIdx = -1
+	)
+	for i, m := range candidates {
+		attempt := req
+		if m.ModelID != "" {
+			attempt.Model = &m
+		} else {
+			attempt.Model = nil // дефолтная модель opencode
+		}
+		resp, lastErr = e.oc.SendMessage(ctx, sessionID, attempt)
+		if lastErr == nil && resp.MessageError() == "" {
+			usedIdx = i
+			break
+		}
+		if lastErr != nil {
+			e.log.Warn("model unavailable, trying next", "model", m.String(), "error", lastErr)
+		} else {
+			e.log.Warn("model returned error, trying next", "model", m.String(), "error", resp.MessageError())
+			lastErr = fmt.Errorf("%s", resp.MessageError())
+		}
+	}
+
+	if usedIdx > 0 {
+		e.log.Info("model fallback used", "model", candidates[usedIdx].String())
+	}
+
+	if lastErr != nil {
 		msg.Status = store.StatusError
-		msg.Info = mustJSON(map[string]string{"error": err.Error()})
+		msg.Info = mustJSON(map[string]string{"error": lastErr.Error()})
 		e.publish(userID, sessionID, "message.updated", map[string]any{
 			"sessionID": sessionID,
 			"info": opencode.Message{
@@ -378,7 +409,7 @@ func (e *Engine) runMessage(userID, sessionID, msgID string, req opencode.Messag
 					} `json:"data"`
 				}{Name: "Error", Data: struct {
 					Message string `json:"message"`
-				}{Message: err.Error()}},
+				}{Message: lastErr.Error()}},
 			},
 		})
 	} else {
@@ -400,6 +431,39 @@ func (e *Engine) runMessage(userID, sessionID, msgID string, req opencode.Messag
 		return
 	}
 	_ = e.store.SaveMessage(msg)
+}
+
+// modelCandidates строит упорядоченный список моделей для одного запроса:
+//  1. модель, явно заданная клиентом (если есть);
+//  2. OPENCODE_MODEL (если задана);
+//  3. OPENCODE_MODEL_FALLBACK по порядку;
+//  4. дефолтная модель opencode (пустая ModelRef → поле model не шлётся).
+//
+// Повторы исключаются. Финальный пустой кандидат гарантирует, что при
+// недоступности всех явных моделей запрос уходит без модели — opencode сам
+// выбирает свою дефолтную, и сообщение не падает.
+func (e *Engine) modelCandidates(requested *opencode.ModelRef) []opencode.ModelRef {
+	seen := make(map[string]bool)
+	var out []opencode.ModelRef
+	add := func(m opencode.ModelRef) {
+		key := m.String() // для пустой (дефолт opencode) ключ == ""
+		if seen[key] {
+			return
+		}
+		seen[key] = true
+		out = append(out, m)
+	}
+	if requested != nil {
+		add(*requested)
+	}
+	if e.cfg.DefaultModel != "" {
+		add(opencode.ParseModelRef(e.cfg.DefaultModel))
+	}
+	for _, m := range e.cfg.FallbackModels {
+		add(m)
+	}
+	add(opencode.ModelRef{}) // дефолт opencode — всегда последний запасной
+	return out
 }
 
 // assistantMessage превращает AssistantInfo в единый тип Message для событий.

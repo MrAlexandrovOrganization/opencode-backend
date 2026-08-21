@@ -50,6 +50,7 @@ make up
 | `OPENCODE_REQUEST_TIMEOUT` | таймаут одного запроса | `30m` |
 | `PERMISSION_MODE` | `ask` / `allow` / `deny` | `ask` |
 | `OPENCODE_AGENT` / `OPENCODE_MODEL` | агент и модель по умолчанию | `build` / пусто |
+| `OPENCODE_MODEL_FALLBACK` | запасные модели через запятую (`provider/model`), перебираются при недоступности основной; в конце — дефолт opencode | пусто |
 | `LOG_LEVEL` | `debug` / `info` / `warn` / `error` | `info` |
 
 ## API

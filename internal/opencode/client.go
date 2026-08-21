@@ -26,6 +26,28 @@ type ModelRef struct {
 	ModelID    string `json:"modelID"`
 }
 
+// ParseModelRef разбирает строку "provider/model" в ModelRef. Если слэша нет,
+// вся строка трактуется как ModelID, а ProviderID остаётся пустым.
+func ParseModelRef(s string) ModelRef {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return ModelRef{}
+	}
+	if i := strings.Index(s, "/"); i >= 0 {
+		return ModelRef{ProviderID: s[:i], ModelID: s[i+1:]}
+	}
+	return ModelRef{ModelID: s}
+}
+
+// String возвращает строковое представление "provider/model" (или просто
+// ModelID, если провайдер не задан).
+func (m ModelRef) String() string {
+	if m.ProviderID != "" {
+		return m.ProviderID + "/" + m.ModelID
+	}
+	return m.ModelID
+}
+
 // PartInput — часть контента, отправляемая на сервер.
 // Это либо текст, либо файл (см. AddText/AddFile).
 type PartInput struct {
