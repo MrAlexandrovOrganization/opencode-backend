@@ -24,7 +24,6 @@ type Config struct {
 	DefaultAgent     string
 	DefaultModel     string
 	FallbackModels   []opencode.ModelRef
-	LogLevel         string
 }
 
 // Load читает конфигурацию из окружения.
@@ -47,7 +46,6 @@ func Load() (*Config, error) {
 		DefaultAgent:     getEnv("OPENCODE_AGENT", "build"),
 		DefaultModel:     os.Getenv("OPENCODE_MODEL"),
 		FallbackModels:   parseModelList(os.Getenv("OPENCODE_MODEL_FALLBACK")),
-		LogLevel:         getEnv("LOG_LEVEL", "info"),
 	}, nil
 }
 

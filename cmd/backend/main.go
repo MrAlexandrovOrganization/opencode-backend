@@ -16,6 +16,7 @@ import (
 	"opencode-backend/internal/api"
 	"opencode-backend/internal/config"
 	"opencode-backend/internal/engine"
+	"opencode-backend/internal/logx"
 	"opencode-backend/internal/opencode"
 	"opencode-backend/internal/store"
 	"opencode-backend/internal/token"
@@ -29,8 +30,19 @@ func main() {
 		os.Exit(1)
 	}
 
-	logger := newLogger(cfg.LogLevel)
-	slog.SetDefault(logger)
+	adminToken := cfg.AdminToken
+	if adminToken == "" {
+		adminToken = token.New()
+		// Решение по bootstrap-токену: в лог печатаем только факт генерации,
+		// сам токен записываем в файл .admin_token (права 0600) рядом с БД,
+		// либо в текущей директории, если БД не используется.
+		if err := saveAdminToken(adminToken, cfg.DBPath); err != nil {
+			slog.Error("save generated ADMIN_TOKEN", "error", err)
+			os.Exit(1)
+		}
+	}
+
+	logger := logx.Setup("opencode-backend", adminToken, cfg.OpenCodePassword)
 
 	oc := opencode.New(cfg.OpenCodeBaseURL, cfg.OpenCodeUsername, cfg.OpenCodePassword)
 	{
@@ -62,13 +74,7 @@ func main() {
 	hub := ws.NewHub()
 	eng := engine.New(oc, st, hub, cfg, logger)
 
-	// Сид администратора: токен из env (или сгенерированный, логируется один раз).
-	adminToken := cfg.AdminToken
-	if adminToken == "" {
-		adminToken = token.New()
-		logger.Warn("ADMIN_TOKEN не задан — сгенерирован. Сохраните его!",
-			"token", adminToken)
-	}
+	// Сид администратора: токен из env или сгенерированный (см. выше).
 	eng.EnsureUser("admin", "admin")
 	_ = st.EnsureAPIKey(&store.APIKey{
 		TokenHash: token.Hash(adminToken),
@@ -107,17 +113,21 @@ func main() {
 	logger.Info("stopped")
 }
 
-func newLogger(level string) *slog.Logger {
-	var lvl slog.Level
-	switch level {
-	case "debug":
-		lvl = slog.LevelDebug
-	case "warn":
-		lvl = slog.LevelWarn
-	case "error":
-		lvl = slog.LevelError
-	default:
-		lvl = slog.LevelInfo
+// saveAdminToken записывает сгенерированный токен в файл .admin_token
+// (0600) в каталоге БД или в текущей директории. Токен не логируется,
+// чтобы не утекать в централизованные логи.
+func saveAdminToken(tok, dbPath string) error {
+	dir := "."
+	if dbPath != "" {
+		dir = filepath.Dir(dbPath)
 	}
-	return slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: lvl}))
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return err
+	}
+	path := filepath.Join(dir, ".admin_token")
+	if err := os.WriteFile(path, []byte(tok+"\n"), 0o600); err != nil {
+		return err
+	}
+	slog.Warn("generated new ADMIN_TOKEN", "path", path)
+	return nil
 }
