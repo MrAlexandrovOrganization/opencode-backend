@@ -41,12 +41,26 @@ func New(opts Options) *slog.Logger {
 	if w == nil {
 		w = os.Stdout
 	}
-	var h slog.Handler = slog.NewJSONHandler(w, &slog.HandlerOptions{Level: level})
+	var h slog.Handler = slog.NewJSONHandler(w, &slog.HandlerOptions{
+		Level: level,
+		ReplaceAttr: func(_ []string, a slog.Attr) slog.Attr {
+			switch a.Key {
+			case slog.TimeKey:
+				return slog.String("timestamp", a.Value.Time().UTC().Format("2006-01-02T15:04:05.999999999Z07:00"))
+			case slog.LevelKey:
+				return slog.String("severity_text", a.Value.String())
+			case slog.MessageKey:
+				return slog.String("body", a.Value.String())
+			default:
+				return a
+			}
+		},
+	})
 	// Service attr must be attached BEFORE the redact wrapper:
 	// Handler.WithAttrs on the wrapper would delegate to the inner handler
 	// and records would bypass masking.
 	if opts.Service != "" {
-		h = h.WithAttrs([]slog.Attr{slog.String("service", opts.Service)})
+		h = h.WithAttrs([]slog.Attr{slog.String("service.name", opts.Service)})
 	}
 	h = NewRedactHandler(h, opts.Secrets...)
 	h = NewTraceHandler(h)
@@ -156,6 +170,7 @@ func (h *TraceHandler) WithGroup(name string) slog.Handler {
 }
 
 func (h *TraceHandler) Handle(ctx context.Context, r slog.Record) error {
+	r.AddAttrs(slog.Int("severity_number", severityNumber(r.Level)))
 	sc := trace.SpanContextFromContext(ctx)
 	if sc.IsValid() {
 		r.AddAttrs(
@@ -165,4 +180,19 @@ func (h *TraceHandler) Handle(ctx context.Context, r slog.Record) error {
 		)
 	}
 	return h.Handler.Handle(ctx, r)
+}
+
+func severityNumber(level slog.Level) int {
+	switch {
+	case level < slog.LevelDebug:
+		return 1
+	case level < slog.LevelInfo:
+		return 5
+	case level < slog.LevelWarn:
+		return 9
+	case level < slog.LevelError:
+		return 13
+	default:
+		return 17
+	}
 }

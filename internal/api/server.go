@@ -112,7 +112,7 @@ func (s *Server) logging(next http.Handler) http.Handler {
 		start := time.Now()
 		rw := &statusWriter{ResponseWriter: w, status: http.StatusOK}
 		next.ServeHTTP(rw, r)
-		s.log.Info("http",
+		s.log.InfoContext(r.Context(), "http",
 			"method", r.Method,
 			"path", r.URL.Path,
 			"status", rw.status,

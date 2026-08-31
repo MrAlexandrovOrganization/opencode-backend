@@ -25,10 +25,7 @@ services:
       - "127.0.0.1:8091:8080"
     networks:
       - whisper-net
-      - jaeger-net
 
 networks:
   whisper-net:
-    external: true
-  jaeger-net:
     external: true

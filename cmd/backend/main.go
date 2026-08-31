@@ -13,12 +13,15 @@ import (
 	"syscall"
 	"time"
 
+	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
+
 	"opencode-backend/internal/api"
 	"opencode-backend/internal/config"
 	"opencode-backend/internal/engine"
 	"opencode-backend/internal/logx"
 	"opencode-backend/internal/opencode"
 	"opencode-backend/internal/store"
+	"opencode-backend/internal/telemetry"
 	"opencode-backend/internal/token"
 	"opencode-backend/internal/ws"
 )
@@ -43,6 +46,18 @@ func main() {
 	}
 
 	logger := logx.Setup("opencode-backend", adminToken, cfg.OpenCodePassword)
+	shutdownTelemetry, err := telemetry.Init(context.Background())
+	if err != nil {
+		logger.Error("telemetry", "error", err)
+		os.Exit(1)
+	}
+	defer func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := shutdownTelemetry(ctx); err != nil {
+			logger.Error("telemetry shutdown", "error", err)
+		}
+	}()
 
 	oc := opencode.New(cfg.OpenCodeBaseURL, cfg.OpenCodeUsername, cfg.OpenCodePassword)
 	{
@@ -91,7 +106,7 @@ func main() {
 	srv := api.New(eng, hub, st, cfg, logger)
 	httpServer := &http.Server{
 		Addr:              ":" + cfg.Port,
-		Handler:           srv.Handler(),
+		Handler:           otelhttp.NewHandler(srv.Handler(), "opencode-backend"),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 
