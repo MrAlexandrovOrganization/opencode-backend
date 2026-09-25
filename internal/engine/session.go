@@ -43,6 +43,7 @@ type SessionState struct {
 	pending *pendingQuestions
 	model   *opencode.ModelRef
 	agent   string
+	updated time.Time
 }
 
 func newSessionState(userID, sessionID string) *SessionState {
@@ -62,6 +63,7 @@ func (s *SessionState) tryAcquire() bool {
 	}
 	s.busy = true
 	s.stream = &Stream{}
+	s.updated = time.Now()
 	return true
 }
 
@@ -70,5 +72,6 @@ func (s *SessionState) release() {
 	s.mu.Lock()
 	s.busy = false
 	s.stream = nil
+	s.updated = time.Now()
 	s.mu.Unlock()
 }

@@ -240,6 +240,90 @@ func TestResumeSessionAfterRestart(t *testing.T) {
 	}
 }
 
+func TestEnsureUserRestoresSavedSessionRouting(t *testing.T) {
+	f := newFakeServer()
+	st := store.NewMemory()
+	hub := ws.NewHub()
+	oc := opencode.New(f.srv.URL, "opencode", "")
+	cfg := &config.Config{RequestTimeout: 5 * time.Second, WorkspaceDir: "/workspace"}
+
+	eng1 := New(oc, st, hub, cfg, testLogger())
+	eng1.EnsureUser("u1", "u1")
+	sess, err := eng1.CreateSession(context.Background(), "u1", "фоновая")
+	if err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+
+	// Новый движок имитирует рестарт до первого HTTP-запроса фронтенда.
+	eng2 := New(oc, st, hub, cfg, testLogger())
+	eng2.EnsureUser("u1", "u1")
+	if owner, ok := eng2.ownerFor(sess.ID); !ok || owner != "u1" {
+		t.Fatalf("owner after restart = %q, %v; want u1, true", owner, ok)
+	}
+	if state := eng2.sessionState("u1", sess.ID); state == nil {
+		t.Fatal("session state was not restored")
+	}
+	f.srv.Close()
+}
+
+func TestListSessionActivities(t *testing.T) {
+	f := newFakeServer()
+	f.delay = time.Second
+	eng, _, _ := testEngine(t, f)
+
+	first, err := eng.CreateSession(context.Background(), "u1", "первая")
+	if err != nil {
+		t.Fatalf("CreateSession first: %v", err)
+	}
+	second, err := eng.CreateSession(context.Background(), "u1", "вторая")
+	if err != nil {
+		t.Fatalf("CreateSession second: %v", err)
+	}
+	var req opencode.MessageRequest
+	req.AddText("фоновая задача")
+	if _, err := eng.SendMessage(context.Background(), "u1", first.ID, req); err != nil {
+		t.Fatalf("SendMessage: %v", err)
+	}
+
+	activities, err := eng.ListSessionActivities(context.Background(), "u1")
+	if err != nil {
+		t.Fatalf("ListSessionActivities: %v", err)
+	}
+	byID := make(map[string]*SessionActivity, len(activities))
+	for _, activity := range activities {
+		byID[activity.SessionID] = activity
+	}
+	if got := byID[first.ID]; got == nil || !got.Busy || got.State != "running" {
+		t.Fatalf("first activity = %+v, want running", got)
+	}
+	if got := byID[second.ID]; got == nil || got.Busy || got.State != "idle" {
+		t.Fatalf("second activity = %+v, want idle", got)
+	}
+}
+
+func TestSessionUpdatedPersistsOpenCodeTitle(t *testing.T) {
+	f := newFakeServer()
+	eng, _, st := testEngine(t, f)
+	sess, err := eng.CreateSession(context.Background(), "u1", "telegram-bot")
+	if err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+	props := mustMarshal(t, map[string]any{
+		"info": map[string]any{
+			"id": sess.ID, "title": "Исправить очередь сообщений", "directory": "/workspace/opencode-bot",
+		},
+	})
+	eng.handleEvent(opencode.Event{Type: "session.updated", Properties: props})
+
+	stored, err := st.GetSession(sess.ID)
+	if err != nil {
+		t.Fatalf("GetSession: %v", err)
+	}
+	if stored.Title != "Исправить очередь сообщений" || stored.Directory != "/workspace/opencode-bot" {
+		t.Fatalf("stored session = %+v", stored)
+	}
+}
+
 func TestSendMessageAsyncFlow(t *testing.T) {
 	f := newFakeServer()
 	eng, hub, st := testEngine(t, f)

@@ -71,6 +71,13 @@ func (e *Engine) EnsureUser(userID, name string) {
 	e.mu.Unlock()
 	if !ok {
 		_ = e.store.EnsureUser(&store.User{ID: userID, Name: name, CreatedAt: time.Now()})
+		// После рестарта шлюза маршрутизация событий должна быть готова до
+		// первого запроса фронтенда, иначе SSE-события фоновой сессии теряются.
+		if sessions, err := e.store.ListSessions(userID); err == nil {
+			for _, sess := range sessions {
+				e.addSessionState(userID, sess.ID)
+			}
+		}
 	}
 }
 
@@ -117,10 +124,20 @@ func (e *Engine) sessionState(userID, sessionID string) *SessionState {
 
 func (e *Engine) addSession(userID, sessionID string) {
 	e.EnsureUser(userID, userID)
+	e.addSessionState(userID, sessionID)
+}
+
+// addSessionState регистрирует существующую сессию без повторного EnsureUser.
+func (e *Engine) addSessionState(userID, sessionID string) {
 	e.mu.Lock()
 	e.owner[sessionID] = userID
 	e.mu.Unlock()
+	e.mu.RLock()
 	u := e.users[userID]
+	e.mu.RUnlock()
+	if u == nil {
+		return
+	}
 	u.mu.Lock()
 	if u.sessions[sessionID] == nil {
 		u.sessions[sessionID] = newSessionState(userID, sessionID)
@@ -285,13 +302,15 @@ func (e *Engine) SessionEmpty(ctx context.Context, userID, sessionID string) (bo
 // (idle/busy/retry). Позволяет извне (логи, админка, отладка) понять, почему
 // фронтенд может «висеть» на «Работаю…».
 type SessionActivity struct {
-	SessionID   string   `json:"sessionID"`
-	Busy        bool     `json:"busy"`
-	Status      string   `json:"status"`     // краткая строка «что агент делает сейчас»
-	Partial     string   `json:"partial"`    // накопленный текст ответа (обрезан)
-	Permissions []string `json:"permissions"` // ожидающие разрешения (permissionID)
-	Question    bool     `json:"question"`    // ожидает ответа на вопрос агента
-	OCStatus    string   `json:"ocStatus"`    // статус opencode-сервера: idle/busy/retry/""
+	SessionID   string    `json:"sessionID"`
+	State       string    `json:"state"` // idle | running | waiting_permission | waiting_question
+	Busy        bool      `json:"busy"`
+	Status      string    `json:"status"`      // краткая строка «что агент делает сейчас»
+	Partial     string    `json:"partial"`     // накопленный текст ответа (обрезан)
+	Permissions []string  `json:"permissions"` // ожидающие разрешения (permissionID)
+	Question    bool      `json:"question"`    // ожидает ответа на вопрос агента
+	OCStatus    string    `json:"ocStatus"`    // статус opencode-сервера: idle/busy/retry/""
+	UpdatedAt   time.Time `json:"updatedAt"`
 }
 
 // SessionActivity возвращает живой статус сессии.
@@ -299,26 +318,64 @@ func (e *Engine) SessionActivity(ctx context.Context, userID, sessionID string) 
 	if _, err := e.ensureSession(userID, sessionID); err != nil {
 		return nil, err
 	}
-	act := &SessionActivity{SessionID: sessionID}
-	if sess := e.sessionState(userID, sessionID); sess != nil {
-		sess.mu.Lock()
-		act.Busy = sess.busy
-		if sess.stream != nil {
-			act.Status = sess.stream.status
-			act.Partial = truncateString(sess.stream.partial, 1000)
-		}
-		for pid := range sess.perms {
-			act.Permissions = append(act.Permissions, pid)
-		}
-		act.Question = sess.pending != nil
-		sess.mu.Unlock()
-	}
+	act := e.sessionActivitySnapshot(userID, sessionID)
 	if st, err := e.oc.SessionStatuses(ctx); err == nil {
 		if s, ok := st[sessionID]; ok {
 			act.OCStatus = s.Type
 		}
 	}
 	return act, nil
+}
+
+// ListSessionActivities возвращает единый снимок всех сессий пользователя.
+// Фронтенд получает статусы одним запросом вместо N+1 вызовов activity.
+func (e *Engine) ListSessionActivities(ctx context.Context, userID string) ([]*SessionActivity, error) {
+	sessions, err := e.store.ListSessions(userID)
+	if err != nil {
+		return nil, err
+	}
+	statuses, _ := e.oc.SessionStatuses(ctx)
+	out := make([]*SessionActivity, 0, len(sessions))
+	for _, sess := range sessions {
+		if _, err := e.ensureSession(userID, sess.ID); err != nil {
+			return nil, err
+		}
+		act := e.sessionActivitySnapshot(userID, sess.ID)
+		if status, ok := statuses[sess.ID]; ok {
+			act.OCStatus = status.Type
+		}
+		out = append(out, act)
+	}
+	return out, nil
+}
+
+func (e *Engine) sessionActivitySnapshot(userID, sessionID string) *SessionActivity {
+	act := &SessionActivity{SessionID: sessionID, State: "idle"}
+	sess := e.sessionState(userID, sessionID)
+	if sess == nil {
+		return act
+	}
+	sess.mu.Lock()
+	defer sess.mu.Unlock()
+	act.Busy = sess.busy
+	act.UpdatedAt = sess.updated
+	if sess.stream != nil {
+		act.Status = sess.stream.status
+		act.Partial = truncateString(sess.stream.partial, 1000)
+	}
+	for pid := range sess.perms {
+		act.Permissions = append(act.Permissions, pid)
+	}
+	act.Question = sess.pending != nil
+	switch {
+	case act.Question:
+		act.State = "waiting_question"
+	case len(act.Permissions) > 0:
+		act.State = "waiting_permission"
+	case act.Busy:
+		act.State = "running"
+	}
+	return act
 }
 
 // ResumeSession активирует существующую сессию пользователя (для переключения

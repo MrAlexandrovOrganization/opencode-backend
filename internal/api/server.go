@@ -47,6 +47,7 @@ func (s *Server) Handler() http.Handler {
 	protected.HandleFunc("GET /api/v1/me", s.me)
 	protected.HandleFunc("POST /api/v1/auth/tokens", s.createToken)
 	protected.HandleFunc("GET /api/v1/sessions", s.listSessions)
+	protected.HandleFunc("GET /api/v1/sessions/activity", s.listSessionActivities)
 	protected.HandleFunc("POST /api/v1/sessions", s.createSession)
 	protected.HandleFunc("GET /api/v1/sessions/{id}", s.getSession)
 	protected.HandleFunc("PATCH /api/v1/sessions/{id}", s.updateSession)
@@ -207,6 +208,15 @@ func (s *Server) listSessions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, sessions)
+}
+
+func (s *Server) listSessionActivities(w http.ResponseWriter, r *http.Request) {
+	activities, err := s.eng.ListSessionActivities(r.Context(), userIDFrom(r.Context()))
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, activities)
 }
 
 func (s *Server) createSession(w http.ResponseWriter, r *http.Request) {

@@ -60,7 +60,9 @@ make up
 - `POST /api/v1/auth/tokens` — создать токен.
 - `GET|POST /api/v1/sessions`, `GET|PATCH|DELETE /api/v1/sessions/{id}`,
   `POST /api/v1/sessions/{id}/fork` — управление сессиями.
-- `GET /api/v1/sessions/{id}/activity` — живой статус сессии (занята ли,
+- `GET /api/v1/sessions/activity` — единый снимок activity всех доступных
+  пользователю сессий: `idle`, `running`, ожидание permission или вопроса.
+- `GET /api/v1/sessions/{id}/activity` — живой статус одной сессии (занята ли,
   текущий инструмент/статус, накопленный текст, ожидающие разрешения и вопросы,
   статус opencode-сервера `idle`/`busy`/`retry`).
 - `POST /api/v1/sessions/{id}/messages` (202 + messageID), `GET …/messages`,

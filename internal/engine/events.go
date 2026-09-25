@@ -239,6 +239,24 @@ func (e *Engine) onSessionUpdated(ev opencode.Event) {
 	if !ok {
 		return
 	}
+	// OpenCode часто присваивает заголовок после первого сообщения. Сохраняем
+	// его до публикации, чтобы переподключившийся frontend сразу видел
+	// различимые названия сессий, а не исходный "telegram-bot".
+	stored, err := e.store.GetSession(props.Info.ID)
+	if err != nil {
+		e.log.Warn("get session for title update", "session_id", props.Info.ID, "error", err)
+	} else {
+		if props.Info.Title != "" {
+			stored.Title = props.Info.Title
+		}
+		if props.Info.Directory != "" {
+			stored.Directory = props.Info.Directory
+		}
+		stored.UpdatedAt = time.Now()
+		if err := e.store.SaveSession(stored); err != nil {
+			e.log.Warn("save session title update", "session_id", props.Info.ID, "error", err)
+		}
+	}
 	e.publish(userID, props.Info.ID, "session.updated", props.Info)
 }
 
