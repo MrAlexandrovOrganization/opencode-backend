@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 	"sync"
 	"time"
 
@@ -625,6 +626,80 @@ func (e *Engine) AbortSession(ctx context.Context, userID, sessionID string) err
 	return e.oc.AbortSession(ctx, sessionID)
 }
 
+// RunCommand запускает пользовательскую slash-команду OpenCode в фоне той же
+// сессии. Результат и потоковые события приходят к фронтендам точно так же,
+// как для обычного сообщения.
+func (e *Engine) RunCommand(ctx context.Context, userID, sessionID, command, arguments string) (string, error) {
+	if strings.TrimSpace(command) == "" {
+		return "", errors.New("команда обязательна")
+	}
+	sess, err := e.ensureSession(userID, sessionID)
+	if err != nil {
+		return "", err
+	}
+	if !sess.tryAcquire() {
+		return "", ErrBusy
+	}
+	msgID := newID()
+	invocation := "/" + command
+	if arguments = strings.TrimSpace(arguments); arguments != "" {
+		invocation += " " + arguments
+	}
+	parts, _ := json.Marshal([]opencode.PartInput{{Type: "text", Text: invocation}})
+	_ = e.store.SaveMessage(&store.Message{
+		ID:        msgID,
+		SessionID: sessionID,
+		Role:      "user",
+		Parts:     parts,
+		Status:    store.StatusPending,
+		CreatedAt: time.Now(),
+	})
+	e.publish(userID, sessionID, "message.started", map[string]string{"messageID": msgID, "command": command})
+	go e.runCommand(userID, sessionID, msgID, command, arguments)
+	return msgID, nil
+}
+
+func (e *Engine) runCommand(userID, sessionID, msgID, command, arguments string) {
+	defer func() {
+		if sess := e.sessionState(userID, sessionID); sess != nil {
+			sess.release()
+		}
+	}()
+	ctx, cancel := context.WithTimeout(context.Background(), e.cfg.RequestTimeout)
+	defer cancel()
+	resp, err := e.oc.RunCommand(ctx, sessionID, command, arguments)
+	now := time.Now()
+	msg := &store.Message{ID: msgID, SessionID: sessionID, Role: "assistant", Status: store.StatusCompleted, CreatedAt: now, CompletedAt: &now}
+	if err != nil {
+		msg.Status = store.StatusError
+		msg.Info = mustJSON(map[string]string{"error": err.Error()})
+		e.publish(userID, sessionID, "message.updated", map[string]any{"sessionID": sessionID, "info": commandErrorMessage(sessionID, msgID, err)})
+		_ = e.store.SaveMessage(msg)
+		return
+	}
+	if resp.Info.ID != "" {
+		msg.ID = resp.Info.ID
+	}
+	msg.Info = mustJSON(resp.Info)
+	msg.Parts = mustJSON(resp.Parts)
+	if resp.MessageError() != "" {
+		msg.Status = store.StatusError
+	}
+	_ = e.store.SaveMessage(msg)
+	e.publish(userID, sessionID, "message.updated", map[string]any{"sessionID": sessionID, "info": assistantMessage(sessionID, resp.Info)})
+}
+
+func commandErrorMessage(sessionID, msgID string, err error) opencode.Message {
+	return opencode.Message{ID: msgID, SessionID: sessionID, Role: "assistant", Error: &struct {
+		Name string `json:"name"`
+		Data struct {
+			Message string `json:"message"`
+		} `json:"data"`
+	}{Name: "Error", Data: struct {
+		Message string `json:"message"`
+	}{Message: err.Error()}}}
+}
+
 // ReplyPermission отвечает на запрос разрешения.
 func (e *Engine) ReplyPermission(ctx context.Context, userID, sessionID, permissionID, response string) error {
 	if _, err := e.ensureSession(userID, sessionID); err != nil {
@@ -681,6 +756,12 @@ func (e *Engine) Health(ctx context.Context) error {
 // Agents возвращает список агентов opencode.
 func (e *Engine) Agents(ctx context.Context) ([]opencode.Agent, error) {
 	return e.oc.Agents(ctx)
+}
+
+// Commands возвращает команды OpenCode без собственного кеша, чтобы изменения
+// конфигурации и плагинов были видны фронтендам сразу.
+func (e *Engine) Commands(ctx context.Context) ([]opencode.Command, error) {
+	return e.oc.Commands(ctx)
 }
 
 // Providers возвращает провайдеров и модели (сырой JSON сервера).

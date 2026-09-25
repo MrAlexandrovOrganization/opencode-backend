@@ -57,6 +57,7 @@ func (s *Server) Handler() http.Handler {
 	protected.HandleFunc("POST /api/v1/sessions/{id}/resume", s.resumeSession)
 	protected.HandleFunc("POST /api/v1/sessions/{id}/fork", s.forkSession)
 	protected.HandleFunc("POST /api/v1/sessions/{id}/messages", s.sendMessage)
+	protected.HandleFunc("POST /api/v1/sessions/{id}/commands", s.runCommand)
 	protected.HandleFunc("GET /api/v1/sessions/{id}/messages", s.listMessages)
 	protected.HandleFunc("GET /api/v1/sessions/{id}/messages/{mid}", s.getMessage)
 	protected.HandleFunc("POST /api/v1/sessions/{id}/abort", s.abort)
@@ -64,6 +65,7 @@ func (s *Server) Handler() http.Handler {
 	protected.HandleFunc("POST /api/v1/questions/{qid}", s.replyQuestion)
 	protected.HandleFunc("POST /api/v1/files", s.uploadFile)
 	protected.HandleFunc("GET /api/v1/agents", s.agents)
+	protected.HandleFunc("GET /api/v1/commands", s.commands)
 	protected.HandleFunc("GET /api/v1/providers", s.providers)
 	protected.HandleFunc("GET /api/v1/ws", s.ws)
 
@@ -356,6 +358,23 @@ func (s *Server) abort(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusAccepted)
 }
 
+func (s *Server) runCommand(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Command   string `json:"command"`
+		Arguments string `json:"arguments"`
+	}
+	if err := decodeJSON(r, &body); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	messageID, err := s.eng.RunCommand(r.Context(), userIDFrom(r.Context()), r.PathValue("id"), body.Command, body.Arguments)
+	if err != nil {
+		writeEngineErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusAccepted, map[string]string{"messageID": messageID})
+}
+
 func (s *Server) replyPermission(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Response string `json:"response"`
@@ -400,6 +419,15 @@ func (s *Server) agents(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, agents)
+}
+
+func (s *Server) commands(w http.ResponseWriter, r *http.Request) {
+	commands, err := s.eng.Commands(r.Context())
+	if err != nil {
+		writeError(w, http.StatusBadGateway, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, commands)
 }
 
 func (s *Server) providers(w http.ResponseWriter, r *http.Request) {

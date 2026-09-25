@@ -68,6 +68,8 @@ make up
 - `POST /api/v1/sessions/{id}/messages` (202 + messageID), `GET …/messages`,
   `GET …/messages/{mid}` — сообщения.
 - `POST /api/v1/sessions/{id}/abort` — прервать запрос.
+- `GET /api/v1/commands`, `POST /api/v1/sessions/{id}/commands` — список и
+  асинхронный запуск slash-команд OpenCode в сессии.
 - `POST /api/v1/sessions/{id}/permissions/{pid}` — ответ на разрешение.
 - `POST /api/v1/questions/{qid}` — ответ на вопрос.
 - `POST /api/v1/files` — загрузка файла (multipart, поле `file`).

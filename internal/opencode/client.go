@@ -65,6 +65,16 @@ type MessageRequest struct {
 	Parts []PartInput `json:"parts"`
 }
 
+// Command — slash-команда, объявленная в конфигурации OpenCode.
+type Command struct {
+	Name        string `json:"name"`
+	Description string `json:"description,omitempty"`
+	Agent       string `json:"agent,omitempty"`
+	Model       string `json:"model,omitempty"`
+	Template    string `json:"template"`
+	Subtask     bool   `json:"subtask,omitempty"`
+}
+
 // AddText добавляет текстовую часть.
 func (m *MessageRequest) AddText(text string) {
 	m.Parts = append(m.Parts, PartInput{Type: "text", Text: text})
@@ -410,6 +420,29 @@ func (c *Client) AbortSession(ctx context.Context, id string) error {
 func (c *Client) SendMessage(ctx context.Context, id string, req MessageRequest) (*MessageResponse, error) {
 	var resp MessageResponse
 	if err := c.do(ctx, http.MethodPost, "/session/"+id+"/message", req, &resp); err != nil {
+		return nil, err
+	}
+	return &resp, nil
+}
+
+// Commands возвращает актуальный набор slash-команд OpenCode для рабочей
+// директории сервера. Команды могут быть определены пользователем или плагином.
+func (c *Client) Commands(ctx context.Context) ([]Command, error) {
+	var out []Command
+	if err := c.do(ctx, http.MethodGet, "/command", nil, &out); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// RunCommand выполняет slash-команду в существующей сессии.
+func (c *Client) RunCommand(ctx context.Context, id, command, arguments string) (*MessageResponse, error) {
+	var resp MessageResponse
+	body := struct {
+		Command   string `json:"command"`
+		Arguments string `json:"arguments"`
+	}{Command: command, Arguments: arguments}
+	if err := c.do(ctx, http.MethodPost, "/session/"+id+"/command", body, &resp); err != nil {
 		return nil, err
 	}
 	return &resp, nil
