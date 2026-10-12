@@ -1,4 +1,6 @@
 DOCKER_COMPOSE = docker compose
+include versions.mk
+
 BINARY = opencode-backend
 
 .PHONY: build
@@ -40,3 +42,36 @@ format:
 .PHONY: clean
 clean:
 	rm -f $(BINARY)
+
+.PHONY: versions compose-build
+versions:
+	@$(foreach v,$(VERSION_VARS),printf '%s=%s\n' '$(v)' '$($(v))';)
+compose-build:
+	$(DOCKER_COMPOSE) build
+
+# CI builds/publishes once; VM activates immutable digests (Python 3 + Docker required).
+export IMAGE_COMPOSE_FILE := docker-compose.yml
+.PHONY: image-build image-publish image-deploy image-activate
+image-build:
+	python3 scripts/images.py build
+image-publish:
+	python3 scripts/images.py publish
+image-deploy:
+	python3 scripts/images.py deploy
+image-activate:
+	$(IMAGE_COMPOSE) up -d --no-build --pull never --wait --wait-timeout 180
+
+.PHONY: check
+check: test vet
+	@test -z "$$(gofmt -l .)" || { gofmt -l .; exit 1; }
+
+.PHONY: image-check
+image-check:
+	python3 -B scripts/test_images.py
+
+.PHONY: image-compose
+export IMAGE_ARGS
+image-compose:
+	python3 scripts/images.py compose
+
+include makefiles/ci-deploy.mk

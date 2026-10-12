@@ -1,6 +1,10 @@
 services:
   opencode-backend:
-    build: .
+    build:
+      context: .
+      args:
+        GO_VERSION: ${GO_VERSION:?Run via make}
+        ALPINE_VERSION: ${ALPINE_VERSION:?Run via make}
     restart: unless-stopped
     env_file: .env
     environment:
