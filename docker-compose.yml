@@ -1,5 +1,6 @@
 services:
   opencode-backend:
+    container_name: "${CONTAINER_NAME_PREFIX:-}opencode-backend"
     build:
       context: .
       args:
